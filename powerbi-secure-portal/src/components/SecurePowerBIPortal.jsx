@@ -1,121 +1,193 @@
 import React, { useState, useEffect } from "react";
+import { PowerBIEmbed } from "powerbi-client-react";
+import * as models from "powerbi-models";
 import {
-    LineChart,
-    Line,
-    BarChart,
-    Bar,
-    XAxis,
-    YAxis,
-    CartesianGrid,
-    Tooltip,
-    Legend,
-    ResponsiveContainer,
-    PieChart,
-    Pie,
-    Cell,
-    AreaChart,
-    Area,
-    ComposedChart,
-  } from "recharts";
-  
+  LineChart,
+  Line,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+  ResponsiveContainer,
+  PieChart,
+  Pie,
+  Cell,
+  AreaChart,
+  Area,
+  ComposedChart,
+} from "recharts";
+
 import "../App.css";
 
+// -----------------------------------------------------------------------------
+// USERS (from new file, with displayName; you can add more clients later)
+// -----------------------------------------------------------------------------
 const USERS = {
-
-  
-    admin: { username: "admin", password: "admin123", role: "admin" },
-    clientA: { username: "clientA", password: "clientA123", role: "clientA" },
-    clientB: { username: "clientB", password: "clientB123", role: "clientB" },
-    clientC: { username: "clientC", password: "clientC123", role: "clientC" }, // ✅ example new client
-  };
-  
+  admin: {
+    username: "admin",
+    password: "admin123",
+    role: "admin",
+    displayName: "Admin (dashboard owner)",
+  },
+  clientA: {
+    username: "clientA",
+    password: "clientA123",
+    role: "CLIENTA",          // maps to backend CLIENT_CONFIGS.CLIENTA
+    displayName: "Client A",
+  },
+  clientB: {
+    username: "clientB",
+    password: "clientB123",
+    role: "CLIENTB",          // maps to backend CLIENT_CONFIGS.CLIENTB
+    displayName: "Client B",
+  },
+};
 
 const API_BASE = "http://localhost:5050";
 
 export default function SecurePowerBIPortal() {
+
   const [user, setUser] = useState(null);
   const [formData, setFormData] = useState({ username: "", password: "" });
   const [error, setError] = useState("");
-  const [excelData, setExcelData] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [selectedClient, setSelectedClient] = useState(null);
-  const [filters, setFilters] = useState({ month: "", minRevenue: "" });
-  const [chartType, setChartType] = useState("bar");
 
-  // ---------- LOGIN ----------
-  const handleLogin = (e) => {
+  // Power BI specific
+  const [activeClient, setActiveClient] = useState(null);
+  const [embedConfig, setEmbedConfig] = useState(null);
+
+  // ---------------------------------------------------------------------------
+  // LOGIN HELPERS
+  // ---------------------------------------------------------------------------
+  const handleChange = (e) => {
+    const { name, value } = e.target;
+    setFormData((prev) => ({ ...prev, [name]: value }));
+  };
+
+  const handleLoginWithPassword = (e) => {
     e.preventDefault();
+
     const foundUser = Object.values(USERS).find(
       (u) =>
-        u.username === formData.username && u.password === formData.password
+        u.username.toLowerCase() === formData.username.trim().toLowerCase() &&
+        u.password === formData.password.trim()
     );
-    if (foundUser) {
-      setUser(foundUser);
-      setFormData({ username: "", password: "" });
-      setError("");
-      if (foundUser.role === "admin") setSelectedClient("overview");
-    } else {
+
+    if (!foundUser) {
       setError("Invalid username or password");
+      setUser(null);
+      return;
+    }
+
+    setUser(foundUser);
+    setError("");
+
+    if (foundUser.role === "admin") {
+      // admin default to CLIENTA for embed
+      setActiveClient("CLIENTA");
+     // setSelectedClient("overview");
+    } else {
+      // CLIENTA / CLIENTB
+      setActiveClient(foundUser.role);
     }
   };
 
   const handleLogout = () => {
     setUser(null);
-    setExcelData(null);
-    setSelectedClient(null);
-    setFilters({ month: "", minRevenue: "" });
+    setFormData({ username: "", password: "" });
+    setEmbedConfig(null);
+    setActiveClient(null);
+    setError("");
+   // setExcelData(null);
+   // setSelectedClient(null);
+   // setFilters({ month: "", minRevenue: "" });
   };
 
-  // ---------- FETCH EXCEL DATA ----------
+  // ---------------------------------------------------------------------------
+  // FETCH EMBED TOKEN FROM BACKEND
+  // ---------------------------------------------------------------------------
+  const fetchEmbedConfig = async (clientKey) => {
+    if (!clientKey) return;
+
+    try {
+      setLoading(true);
+      setError("");
+
+      const res = await fetch("http://127.0.0.1:5050/api/embed-config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ clientKey }), // "CLIENTA" / "CLIENTB"
+      });
+
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(
+          `Server error ${res.status}: ${text || "Failed to get embed config"}`
+        );
+      }
+
+      const data = await res.json();
+
+      if (!data.embedToken || !data.embedUrl || !data.reportId) {
+        throw new Error(data.error || "Invalid embed configuration returned");
+      }
+
+      setEmbedConfig({
+        id: data.reportId,
+        embedUrl: data.embedUrl,
+        accessToken: data.embedToken,
+      });
+    } catch (err) {
+      console.error("Error fetching embed config:", err);
+      setError(
+        err.message || "Something went wrong while loading the dashboard"
+      );
+      setEmbedConfig(null);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // ---------------------------------------------------------------------------
+  // EFFECT: fetch Power BI embed config when active client changes 
+  // ---------------------------------------------------------------------------
   useEffect(() => {
     if (!user) return;
 
-    const fetchData = async () => {
-      try {
-        setLoading(true);
-        let endpoint = "";
-        if (user.role === "admin") endpoint = "/api/data/admin";
-        if (user.role === "clientA") endpoint = "/api/data/clientA";
-        if (user.role === "clientB") endpoint = "/api/data/clientB";
+    if (activeClient && activeClient.startsWith("CLIENT")) {
+      fetchEmbedConfig(activeClient);
+    }
+  }, [user, activeClient]);
 
-        const res = await fetch(`${API_BASE}${endpoint}`);
-        if (!res.ok) throw new Error(`Server error: ${res.status}`);
-        const data = await res.json();
-        setExcelData(data);
-      } catch (err) {
-        console.error("❌ Error fetching Excel data:", err);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchData();
-  }, [user]);
-
-  // ---------- LOGIN VIEW ----------
+  // ---------------------------------------------------------------------------
+  // FULL-PAGE LOGIN VIEW
+  // ---------------------------------------------------------------------------
   if (!user) {
     return (
       <div className="login-container">
-        <form className="login-box" onSubmit={handleLogin}>
-          <h2>Power BI Portal Login</h2>
+        <form className="login-box" onSubmit={handleLoginWithPassword}>
+          <h2>Secure Power BI Portal</h2>
 
           <label>Username</label>
           <input
             type="text"
+            name="username"
             value={formData.username}
-            onChange={(e) =>
-              setFormData({ ...formData, username: e.target.value })
-            }
+            onChange={handleChange}
+            autoComplete="username"
             required
           />
 
           <label>Password</label>
           <input
             type="password"
+            name="password"
             value={formData.password}
-            onChange={(e) =>
-              setFormData({ ...formData, password: e.target.value })
-            }
+            onChange={handleChange}
+            autoComplete="current-password"
             required
           />
 
@@ -124,310 +196,116 @@ export default function SecurePowerBIPortal() {
           <button type="submit" className="primary-btn">
             Login
           </button>
-
-          {/* <div className="hint">
-            <strong>Demo Logins:</strong>
-            <br />
-            Admin: admin / admin123 <br />
-            Client A: clientA / clientA123 <br />
-            Client B: clientB / clientB123
-          </div> */}
         </form>
       </div>
     );
   }
 
-  // ---------- SIDEBAR ----------
+  // ---------------------------------------------------------------------------
+  // SIDEBAR
+  // ---------------------------------------------------------------------------
   const renderSidebar = () => {
     if (!user) return null;
-  
-    if (user.role === "admin") {
-      const clientKeys = excelData ? Object.keys(excelData) : [];
-  
-      return (
-        <>
-          <h2>Clients</h2>
-          {clientKeys.map((key) => (
-            <button
-              key={key}
-              className={selectedClient === key ? "active" : ""}
-              onClick={() => setSelectedClient(key)}
-            >
-              {key.charAt(0).toUpperCase() + key.slice(1)}
-            </button>
-          ))}
-          <button>Users & Permissions</button>
-        </>
-      );
-    }
-  
-    // Clients
+
+    const isAdmin = user.role === "admin";
+
     return (
       <>
-        <h2>{user.username}</h2>
-        <button className="active">My Dashboard</button>
+        <h3 className="sidebar-title">Clients</h3>
+
+        {isAdmin && (
+          <>
+            <button
+              className={`sidebar-btn ${
+                activeClient === "CLIENTA" ? "active" : ""
+              }`}
+              onClick={() => setActiveClient("CLIENTA")}
+            >
+              CLIENT A
+            </button>
+            <button
+              className={`sidebar-btn ${
+                activeClient === "CLIENTB" ? "active" : ""
+              }`}
+              onClick={() => setActiveClient("CLIENTB")}
+            >
+              CLIENT B
+            </button>
+          </>
+        )}
+
+        {!isAdmin && (
+          <button className="sidebar-btn active">
+            {user.displayName.toUpperCase()}
+          </button>
+        )}
       </>
     );
   };
-  
+  // ---------------------------------------------------------------------------
+  // Power BI EMBED AREA
+  // ---------------------------------------------------------------------------
+  const renderEmbedArea = () => {
+    if (loading) {
+      return <div className="status-msg">Loading dashboard…</div>;
+    }
 
-  // ---------- FILTER ----------
-  const renderFilters = () => (
-    <div className="filter-bar">
-      <label>
-        Month:
-        <select
-          value={filters.month}
-          onChange={(e) => setFilters({ ...filters, month: e.target.value })}
-        >
-          <option value="">All</option>
-          <option>January</option>
-          <option>February</option>
-          <option>March</option>
-          <option>April</option>
-          <option>May</option>
-          <option>June</option>
-        </select>
-      </label>
-  
-      <label>
-        Min Revenue:
-        <input
-          type="number"
-          placeholder="e.g. 50000"
-          value={filters.minRevenue}
-          onChange={(e) =>
-            setFilters({ ...filters, minRevenue: e.target.value })
-          }
+    if (error) {
+      return <div className="error-text">{error}</div>;
+    }
+
+    if (!embedConfig) {
+      return (
+        <div className="status-msg">
+          Select a client to load their Power BI dashboard.
+        </div>
+      );
+    }
+
+    return (
+      <div className="embed-frame">
+        <PowerBIEmbed
+          embedConfig={{
+            type: "report",
+            id: embedConfig.id,
+            embedUrl: embedConfig.embedUrl,
+            accessToken: embedConfig.accessToken,
+            tokenType: models.TokenType.Embed,
+            settings: {
+              panes: {
+                filters: { visible: false },
+                pageNavigation: { visible: true },
+              },
+              navContentPaneEnabled: true,
+            },
+          }}
+          cssClassName="powerbi-report"
         />
-      </label>
-  
-      <label>
-        Chart Type:
-        <select
-          value={chartType}
-          onChange={(e) => setChartType(e.target.value)}
-        >
-          <option value="bar">Bar</option>
-          <option value="line">Line</option>
-          <option value="pie">Pie</option>
-          <option value="area">Area</option>
-          <option value="composed">Composed</option>
-        </select>
-      </label>
-  
-      <button
-        onClick={() => setFilters({ month: "", minRevenue: "" })}
-        className="clear-btn"
-      >
-        Clear Filters
-      </button>
-    </div>
-  );
-  
-
-  // ---------- FILTER LOGIC ----------
-  const applyFilters = (rows) => {
-    if (!rows) return [];
-    return rows.filter((row) => {
-      const matchMonth = filters.month
-        ? row.Month?.toLowerCase() === filters.month.toLowerCase()
-        : true;
-      const matchRevenue = filters.minRevenue
-        ? Number(row.Revenue) >= Number(filters.minRevenue)
-        : true;
-      return matchMonth && matchRevenue;
-    });
-  };
-
-  // ---------- TABLE ----------
-  const renderTable = (rows) => {
-    const filtered = applyFilters(rows);
-    if (filtered.length === 0)
-      return <p>No results match your filters.</p>;
-
-    return (
-      <table className="data-table">
-        <thead>
-          <tr>
-            {Object.keys(filtered[0] || {}).map((key) => (
-              <th key={key}>{key}</th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {filtered.map((row, i) => (
-            <tr key={i}>
-              {Object.values(row).map((val, j) => (
-                <td key={j}>{val}</td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    );
-  };
-
-// ---------- CHART ----------
-const renderCharts = (rows) => {
-    const filtered = applyFilters(rows);
-    if (!filtered.length) return <p>No data to visualize.</p>;
-  
-    const totalRevenue = filtered.reduce((sum, r) => sum + Number(r.Revenue || 0), 0);
-    const totalExpenses = filtered.reduce((sum, r) => sum + Number(r.Expenses || 0), 0);
-    const pieData = [
-      { name: "Revenue", value: totalRevenue },
-      { name: "Expenses", value: totalExpenses },
-    ];
-  
-    return (
-      <div className="charts-container">
-        {chartType === "bar" && (
-          <>
-            <h4>Revenue vs Expenses (Bar)</h4>
-            <ResponsiveContainer width="100%" height={300}>
-              <BarChart data={filtered}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="Month" />
-                <YAxis />
-                <Tooltip />
-                <Legend />
-                <Bar dataKey="Revenue" fill="#4e79a7" />
-                <Bar dataKey="Expenses" fill="#f28e2b" />
-              </BarChart>
-            </ResponsiveContainer>
-          </>
-        )}
-  
-        {chartType === "line" && (
-          <>
-            <h4>Revenue Trend (Line)</h4>
-            <ResponsiveContainer width="100%" height={300}>
-              <LineChart data={filtered}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="Month" />
-                <YAxis />
-                <Tooltip />
-                <Legend />
-                <Line type="monotone" dataKey="Revenue" stroke="#4e79a7" strokeWidth={2} />
-                <Line type="monotone" dataKey="Expenses" stroke="#e15759" strokeWidth={2} />
-              </LineChart>
-            </ResponsiveContainer>
-          </>
-        )}
-  
-        {chartType === "pie" && (
-          <>
-            <h4>Total Revenue vs Expenses (Pie)</h4>
-            <ResponsiveContainer width="100%" height={300}>
-              <PieChart>
-                <Tooltip />
-                <Legend />
-                <Pie
-                  data={pieData}
-                  dataKey="value"
-                  nameKey="name"
-                  outerRadius={120}
-                  fill="#8884d8"
-                  label
-                >
-                  <Cell fill="#4e79a7" />
-                  <Cell fill="#f28e2b" />
-                </Pie>
-              </PieChart>
-            </ResponsiveContainer>
-          </>
-        )}
-  
-        {chartType === "area" && (
-          <>
-            <h4>Revenue vs Expenses (Area)</h4>
-            <ResponsiveContainer width="100%" height={300}>
-              <AreaChart data={filtered}>
-                <defs>
-                  <linearGradient id="colorRev" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#4e79a7" stopOpacity={0.8}/>
-                    <stop offset="95%" stopColor="#4e79a7" stopOpacity={0}/>
-                  </linearGradient>
-                  <linearGradient id="colorExp" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#f28e2b" stopOpacity={0.8}/>
-                    <stop offset="95%" stopColor="#f28e2b" stopOpacity={0}/>
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="Month" />
-                <YAxis />
-                <Tooltip />
-                <Area type="monotone" dataKey="Revenue" stroke="#4e79a7" fill="url(#colorRev)" />
-                <Area type="monotone" dataKey="Expenses" stroke="#f28e2b" fill="url(#colorExp)" />
-              </AreaChart>
-            </ResponsiveContainer>
-          </>
-        )}
-  
-        {chartType === "composed" && (
-          <>
-            <h4>Composed Chart (Bar + Line)</h4>
-            <ResponsiveContainer width="100%" height={300}>
-              <ComposedChart data={filtered}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="Month" />
-                <YAxis />
-                <Tooltip />
-                <Legend />
-                <Bar dataKey="Revenue" barSize={20} fill="#4e79a7" />
-                <Line type="monotone" dataKey="Expenses" stroke="#e15759" />
-              </ComposedChart>
-            </ResponsiveContainer>
-          </>
-        )}
       </div>
     );
   };
-  
-  
 
-  // ---------- DASHBOARD ----------
-  const renderDashboard = () => {
-    if (loading) return <p>Loading data...</p>;
-    if (!excelData) return <p>No data loaded.</p>;
-
-    let dataset = [];
-    if (user.role === "clientA") dataset = excelData.clientA || excelData;
-    if (user.role === "clientB") dataset = excelData.clientB || excelData;
-    if (user.role === "admin") {
-        dataset = excelData[selectedClient] || [];
-      }
-      
-
-    return (
-      <>
-        <h2>
-          {user.role === "admin"
-            ? `Admin Dashboard – ${selectedClient.toUpperCase()}`
-            : `${user.username} Dashboard`}
-        </h2>
-        {renderFilters()}
-        {/* {renderCharts(dataset)} */}
-        <div className="embed-frame">{renderTable(dataset)}</div>
-      </>
-    );
-  };
-
-  // ---------- MAIN LAYOUT ----------
+  // ---------------------------------------------------------------------------
+  // MAIN LAYOUT 
+  // ---------------------------------------------------------------------------
   return (
     <div className="app-container">
       <header className="app-header">
         <h1>Power BI Dashboard</h1>
         <div className="header-actions">
-          <span className="user-name">{user.username}</span>
+          <span className="user-name">
+            {user.displayName || user.username}
+          </span>
           <button onClick={handleLogout}>Sign Out</button>
         </div>
       </header>
 
       <main className="main-container">
         <aside className="sidebar">{renderSidebar()}</aside>
-        <section className="dashboard-content">{renderDashboard()}</section>
+        <section className="dashboard-content">
+          {renderEmbedArea()}
+          {}
+        </section>
       </main>
 
       <footer className="footer">© 2025 Alphard</footer>
