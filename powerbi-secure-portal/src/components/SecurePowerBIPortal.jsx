@@ -2,238 +2,186 @@ import React, { useState, useEffect } from "react";
 import { useMsal, useIsAuthenticated } from "@azure/msal-react";
 import { PowerBIEmbed } from "powerbi-client-react";
 import * as models from "powerbi-models";
-import {
-  LineChart,
-  Line,
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  Legend,
-  ResponsiveContainer,
-  PieChart,
-  Pie,
-  Cell,
-  AreaChart,
-  Area,
-  ComposedChart,
-} from "recharts";
 
 import "../App.css";
 
-// -----------------------------------------------------------------------------
-// USERS (from new file, with displayName; you can add more clients later)
-// -----------------------------------------------------------------------------
-const USERS = {
-  admin: {
-    username: "admin",
-    password: "admin123",
-    role: "admin",
-    displayName: "Admin (dashboard owner)",
-  },
-  clientA: {
-    username: "clientA",
-    password: "clientA123",
-    role: "CLIENTA",          // maps to backend CLIENT_CONFIGS.CLIENTA
-    displayName: "Client A",
-  },
-  clientB: {
-    username: "clientB",
-    password: "clientB123",
-    role: "CLIENTB",          // maps to backend CLIENT_CONFIGS.CLIENTB
-    displayName: "Client B",
-  },
-};
-
+// Backend API
 const API_BASE = "http://localhost:5050";
 
 export default function SecurePowerBIPortal() {
+  const { instance, accounts } = useMsal();
+  const isAuthenticated = useIsAuthenticated();
 
   const [user, setUser] = useState(null);
   const [formData, setFormData] = useState({ username: "", password: "" });
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  //login
-  const { instance, accounts } = useMsal();
-  const isAuthenticated = useIsAuthenticated();
-  const [selectedClient, setSelectedClient] = useState(null);
-  const [filters, setFilters] = useState({ month: "", minRevenue: "" });
-  const [chartType, setChartType] = useState("bar");
 
-  // Power BI specific
-  const [activeClient, setActiveClient] = useState(null);
+  const [activeClient, setActiveClient] = useState(null); // CLIENTA / CLIENTB
   const [embedConfig, setEmbedConfig] = useState(null);
 
-  // ---------------------------------------------------------------------------
-  // LOGIN HELPERS
-  // ---------------------------------------------------------------------------
+  /************************************************************
+   * 1) FORM CHANGE HANDLER
+   ************************************************************/
   const handleChange = (e) => {
-    const { name, value } = e.target;
-    setFormData((prev) => ({ ...prev, [name]: value }));
+    setFormData((prev) => ({ ...prev, [e.target.name]: e.target.value }));
   };
 
-  const handleLoginWithPassword = (e) => {
+  /************************************************************
+   * 2) PASSWORD LOGIN
+   ************************************************************/
+  const handleLoginWithPassword = async (e) => {
     e.preventDefault();
-
-    const foundUser = Object.values(USERS).find(
-      (u) =>
-        u.username.toLowerCase() === formData.username.trim().toLowerCase() &&
-        u.password === formData.password.trim()
-    );
-
-    if (!foundUser) {
-      setError("Invalid username or password");
-      setUser(null);
-      return;
-    }
-
-    setUser(foundUser);
     setError("");
 
-    if (foundUser.role === "admin") {
-      // admin default to CLIENTA for embed
-      setActiveClient("CLIENTA");
-     // setSelectedClient("overview");
-    } else {
-      // CLIENTA / CLIENTB
-      setActiveClient(foundUser.role);
+    try {
+      const res = await fetch(`${API_BASE}/api/auth/login-password`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(formData),
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Login failed");
+
+      setUser({
+        username: data.username,
+        displayName: data.username,
+        role: data.role, // admin / CLIENTA / CLIENTB
+      });
+
+      // Set default dashboard based on role
+      setActiveClient(data.role === "admin" ? "CLIENTA" : data.role);
+    } catch (err) {
+      setError(err.message);
     }
   };
 
+  /************************************************************
+   * 3) MICROSOFT LOGIN BUTTON
+   ************************************************************/
   const handleLoginWithMicrosoft = async () => {
     try {
-      await instance.loginRedirect();
+      await instance.loginRedirect({
+        prompt: "select_account" 
+      });
     } catch (err) {
       console.error("MSAL login error", err);
       setError("Microsoft login failed. Please try again.");
     }
   };
-
-  const handleLogout = () => {
-    // Clear active account ONLY inside your app
-    instance.setActiveAccount(null);
-  
-    // Clear your app UI state
-    setUser(null);
-    setFormData({ username: "", password: "" });
-    setEmbedConfig(null);
-    setActiveClient(null);
-    setError("");
-  
-    // DO NOT CALL logoutPopup or logoutRedirect
-  };
-  
   
 
-  useEffect(() => {
-    if (!isAuthenticated) {
-      setUser(null);
-      return;
-    }
-  
-    // get active signed-in account
-    const activeAccount = instance.getActiveAccount();
-  
+/************************************************************
+ * 4) MICROSOFT LOGIN → LOOKUP ROLE FROM DB (FIXED VERSION)
+ ************************************************************/
+useEffect(() => {
+  const handleMsLogin = async () => {
+    if (!isAuthenticated) return;
+
+    // 🔥 ALWAYS get the true selected account
+    let activeAccount = instance.getActiveAccount();
+
+    // If MSAL does not have an active account yet, set one
     if (!activeAccount) {
-      console.warn("No active account found.");
-      setUser(null);
-      return;
+      if (accounts.length > 0) {
+        instance.setActiveAccount(accounts[0]);
+        activeAccount = accounts[0];
+      } else {
+        return; // no accounts available
+      }
     }
-  
-    console.log("Active account:", activeAccount);
-  
-    const email = activeAccount.username?.toLowerCase() || "";
-    const displayName = activeAccount.name || activeAccount.username;
-  
-    let role = "CLIENTA"; // default
-  
-    if (email === "joshuajojejo@outlook.com") {
-      role = "admin";
-    } else if (email === "ak_nixon@live.concordia.ca") {
-      role = "CLIENTA";
-    }
-  
-    setUser({
-      username: email,
-      role,
-      displayName,
-    });
-  
-    if (role === "admin") {
-      setSelectedClient("overview");
-    } else {
-      setSelectedClient("CLIENTA");
-    }
-  }, [isAuthenticated, instance]);
-  
 
-  // ---------------------------------------------------------------------------
-  // FETCH EMBED TOKEN FROM BACKEND
-  // ---------------------------------------------------------------------------
-  const fetchEmbedConfig = async (clientKey) => {
-    if (!clientKey) return;
+    const msEmail = (activeAccount.username || "").toLowerCase();
 
     try {
-      setLoading(true);
-      setError("");
-
-      const res = await fetch("http://127.0.0.1:5050/api/embed-config", {
+      const res = await fetch(`${API_BASE}/api/auth/login-microsoft`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ clientKey }), // "CLIENTA" / "CLIENTB"
+        body: JSON.stringify({ msEmail }),
       });
-
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(
-          `Server error ${res.status}: ${text || "Failed to get embed config"}`
-        );
-      }
 
       const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Not authorized");
 
-      if (!data.embedToken || !data.embedUrl || !data.reportId) {
-        throw new Error(data.error || "Invalid embed configuration returned");
-      }
-
-      setEmbedConfig({
-        id: data.reportId,
-        embedUrl: data.embedUrl,
-        accessToken: data.embedToken,
+      // Store user info into React state
+      setUser({
+        username: data.username,
+        displayName: activeAccount.name || data.username,
+        role: data.role,
       });
+
+      // Admin sees CLIENTA by default, client sees their own dashboard
+      setActiveClient(data.role === "admin" ? "CLIENTA" : data.role);
     } catch (err) {
-      console.error("Error fetching embed config:", err);
-      setError(
-        err.message || "Something went wrong while loading the dashboard"
-      );
-      setEmbedConfig(null);
-    } finally {
-      setLoading(false);
+      console.error("MS login DB lookup failed:", err);
+      setUser(null);
+      setError(err.message);
     }
   };
 
-  // ---------------------------------------------------------------------------
-  // EFFECT: fetch Power BI embed config when active client changes 
-  // ---------------------------------------------------------------------------
+  handleMsLogin();
+}, [isAuthenticated, accounts, instance]);
+
+
+  /************************************************************
+   * 5) LOGOUT (APP ONLY — does NOT logout Microsoft globally)
+   ************************************************************/
+  const handleLogout = () => {
+    // Clear app state only
+    setEmbedConfig(null);
+    setUser(null);
+    setActiveClient(null);
+    setFormData({ username: "", password: "" });
+    setError("");
+    instance.setActiveAccount(null);
+  };
+  
+
+  /************************************************************
+   * 6) FETCH POWER BI TOKEN WHEN CLIENT CHANGES
+   ************************************************************/
   useEffect(() => {
-    if (!user) return;
+    if (!activeClient || !user) return;
 
-    if (activeClient && activeClient.startsWith("CLIENT")) {
-      fetchEmbedConfig(activeClient);
-    }
-  }, [user, activeClient]);
+    const fetchEmbed = async () => {
+      try {
+        setLoading(true);
+        setEmbedConfig(null);
 
-  // ---------------------------------------------------------------------------
-  // FULL-PAGE LOGIN VIEW
-  // ---------------------------------------------------------------------------
+        const res = await fetch(`${API_BASE}/api/embed-config`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ clientKey: activeClient }),
+        });
+
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error);
+
+        setEmbedConfig({
+          id: data.reportId,
+          embedUrl: data.embedUrl,
+          accessToken: data.embedToken,
+        });
+      } catch (err) {
+        setError(err.message);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchEmbed();
+  }, [activeClient, user]);
+
+  /************************************************************
+   * 7) LOGIN PAGE
+   ************************************************************/
   if (!user) {
     return (
       <div className="login-wrapper">
         <div className="login-card">
           <h2 className="login-title">Secure Power BI Portal</h2>
-    
+
           <form className="login-form" onSubmit={handleLoginWithPassword}>
             <div className="input-group">
               <label>Username</label>
@@ -246,7 +194,7 @@ export default function SecurePowerBIPortal() {
                 required
               />
             </div>
-    
+
             <div className="input-group">
               <label>Password</label>
               <input
@@ -258,39 +206,35 @@ export default function SecurePowerBIPortal() {
                 required
               />
             </div>
-    
+
             {error && <p className="error-text">{error}</p>}
-    
-            <button type="submit" className="btn primary-btn">Login</button>
-    
-            <div className="divider">
-              <span>or</span>
-            </div>
-    
-            <button type="button" className="btn ms-btn" onClick={handleLoginWithMicrosoft}>
-             <img src="/ms-logo.png" alt="Microsoft" className="ms-icon" />
-               Sign in with Microsoft
+
+            <button className="btn primary-btn" type="submit">
+              Login
             </button>
 
+            <div className="divider"><span>or</span></div>
+
+            <button className="btn ms-btn" type="button" onClick={handleLoginWithMicrosoft}>
+              <img src="/ms-logo.png" className="ms-icon" alt="Microsoft" />
+              Sign in with Microsoft
+            </button>
           </form>
         </div>
       </div>
     );
-    
   }
 
-  // ---------------------------------------------------------------------------
-  // SIDEBAR
-  // ---------------------------------------------------------------------------
+  /************************************************************
+   * 8) SIDEBAR
+   ************************************************************/
   const renderSidebar = () => {
-    if (!user) return null;
-  
     const isAdmin = user.role === "admin";
-  
+
     return (
       <>
         <h3 className="sidebar-title">Clients</h3>
-  
+
         {isAdmin ? (
           <>
             <button
@@ -299,7 +243,7 @@ export default function SecurePowerBIPortal() {
             >
               CLIENT A
             </button>
-  
+
             <button
               className={`sidebar-btn ${activeClient === "CLIENTB" ? "active" : ""}`}
               onClick={() => setActiveClient("CLIENTB")}
@@ -308,35 +252,21 @@ export default function SecurePowerBIPortal() {
             </button>
           </>
         ) : (
-          <button className="sidebar-btn active" 
-          onClick={() => setActiveClient("CLIENTA")}
-          >
-            {user.displayName.toUpperCase()}
+          <button className="sidebar-btn active" disabled>
+            {user.role}
           </button>
         )}
       </>
     );
   };
-  
-  // ---------------------------------------------------------------------------
-  // Power BI EMBED AREA
-  // ---------------------------------------------------------------------------
+
+  /************************************************************
+   * 9) EMBED AREA
+   ************************************************************/
   const renderEmbedArea = () => {
-    if (loading) {
-      return <div className="status-msg">Loading dashboard…</div>;
-    }
-
-    if (error) {
-      return <div className="error-text">{error}</div>;
-    }
-
-    if (!embedConfig) {
-      return (
-        <div className="status-msg">
-          Select a client to load their Power BI dashboard.
-        </div>
-      );
-    }
+    if (loading) return <div className="status-msg">Loading dashboard…</div>;
+    if (error) return <div className="error-text">{error}</div>;
+    if (!embedConfig) return <div className="status-msg">Select a client…</div>;
 
     return (
       <div className="embed-frame">
@@ -348,10 +278,7 @@ export default function SecurePowerBIPortal() {
             accessToken: embedConfig.accessToken,
             tokenType: models.TokenType.Embed,
             settings: {
-              panes: {
-                filters: { visible: false },
-                pageNavigation: { visible: true },
-              },
+              panes: { filters: { visible: false } },
               navContentPaneEnabled: true,
             },
           }}
@@ -361,27 +288,23 @@ export default function SecurePowerBIPortal() {
     );
   };
 
-  // ---------------------------------------------------------------------------
-  // MAIN LAYOUT 
-  // ---------------------------------------------------------------------------
+  /************************************************************
+   * 10) MAIN LAYOUT
+   ************************************************************/
   return (
     <div className="app-container">
       <header className="app-header">
         <h1>Power BI Dashboard</h1>
+
         <div className="header-actions">
-          <span className="user-name">
-            {user.displayName || user.username}
-          </span>
+          <span className="user-name">{user.displayName}</span>
           <button onClick={handleLogout}>Sign Out</button>
         </div>
       </header>
 
       <main className="main-container">
         <aside className="sidebar">{renderSidebar()}</aside>
-        <section className="dashboard-content">
-          {renderEmbedArea()}
-          {}
-        </section>
+        <section className="dashboard-content">{renderEmbedArea()}</section>
       </main>
 
       <footer className="footer">© 2025 Alphard</footer>
