@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { useMsal, useIsAuthenticated } from "@azure/msal-react";
 import { PowerBIEmbed } from "powerbi-client-react";
 import * as models from "powerbi-models";
 import {
@@ -54,6 +55,12 @@ export default function SecurePowerBIPortal() {
   const [formData, setFormData] = useState({ username: "", password: "" });
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  //login
+  const { instance, accounts } = useMsal();
+  const isAuthenticated = useIsAuthenticated();
+  const [selectedClient, setSelectedClient] = useState(null);
+  const [filters, setFilters] = useState({ month: "", minRevenue: "" });
+  const [chartType, setChartType] = useState("bar");
 
   // Power BI specific
   const [activeClient, setActiveClient] = useState(null);
@@ -95,16 +102,72 @@ export default function SecurePowerBIPortal() {
     }
   };
 
+  const handleLoginWithMicrosoft = async () => {
+    try {
+      await instance.loginRedirect();
+    } catch (err) {
+      console.error("MSAL login error", err);
+      setError("Microsoft login failed. Please try again.");
+    }
+  };
+
   const handleLogout = () => {
+    // Clear active account ONLY inside your app
+    instance.setActiveAccount(null);
+  
+    // Clear your app UI state
     setUser(null);
     setFormData({ username: "", password: "" });
     setEmbedConfig(null);
     setActiveClient(null);
     setError("");
-   // setExcelData(null);
-   // setSelectedClient(null);
-   // setFilters({ month: "", minRevenue: "" });
+  
+    // DO NOT CALL logoutPopup or logoutRedirect
   };
+  
+  
+
+  useEffect(() => {
+    if (!isAuthenticated) {
+      setUser(null);
+      return;
+    }
+  
+    // get active signed-in account
+    const activeAccount = instance.getActiveAccount();
+  
+    if (!activeAccount) {
+      console.warn("No active account found.");
+      setUser(null);
+      return;
+    }
+  
+    console.log("Active account:", activeAccount);
+  
+    const email = activeAccount.username?.toLowerCase() || "";
+    const displayName = activeAccount.name || activeAccount.username;
+  
+    let role = "CLIENTA"; // default
+  
+    if (email === "joshuajojejo@outlook.com") {
+      role = "admin";
+    } else if (email === "ak_nixon@live.concordia.ca") {
+      role = "CLIENTA";
+    }
+  
+    setUser({
+      username: email,
+      role,
+      displayName,
+    });
+  
+    if (role === "admin") {
+      setSelectedClient("overview");
+    } else {
+      setSelectedClient("CLIENTA");
+    }
+  }, [isAuthenticated, instance]);
+  
 
   // ---------------------------------------------------------------------------
   // FETCH EMBED TOKEN FROM BACKEND
@@ -196,6 +259,14 @@ export default function SecurePowerBIPortal() {
           <button type="submit" className="primary-btn">
             Login
           </button>
+          <button
+            type="button"
+            className="primary-btn"
+            onClick={handleLoginWithMicrosoft}
+            style={{ marginTop: "1rem" }}
+          >
+            Sign in with Microsoft
+          </button>
         </form>
       </div>
     );
@@ -206,42 +277,40 @@ export default function SecurePowerBIPortal() {
   // ---------------------------------------------------------------------------
   const renderSidebar = () => {
     if (!user) return null;
-
+  
     const isAdmin = user.role === "admin";
-
+  
     return (
       <>
         <h3 className="sidebar-title">Clients</h3>
-
-        {isAdmin && (
+  
+        {isAdmin ? (
           <>
             <button
-              className={`sidebar-btn ${
-                activeClient === "CLIENTA" ? "active" : ""
-              }`}
+              className={`sidebar-btn ${activeClient === "CLIENTA" ? "active" : ""}`}
               onClick={() => setActiveClient("CLIENTA")}
             >
               CLIENT A
             </button>
+  
             <button
-              className={`sidebar-btn ${
-                activeClient === "CLIENTB" ? "active" : ""
-              }`}
+              className={`sidebar-btn ${activeClient === "CLIENTB" ? "active" : ""}`}
               onClick={() => setActiveClient("CLIENTB")}
             >
               CLIENT B
             </button>
           </>
-        )}
-
-        {!isAdmin && (
-          <button className="sidebar-btn active">
+        ) : (
+          <button className="sidebar-btn active" 
+          onClick={() => setActiveClient("CLIENTA")}
+          >
             {user.displayName.toUpperCase()}
           </button>
         )}
       </>
     );
   };
+  
   // ---------------------------------------------------------------------------
   // Power BI EMBED AREA
   // ---------------------------------------------------------------------------
