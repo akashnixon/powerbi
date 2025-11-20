@@ -230,46 +230,53 @@ export default function SecurePowerBIPortal() {
   // ---------------------------------------------------------------------------
   if (!user) {
     return (
-      <div className="login-container">
-        <form className="login-box" onSubmit={handleLoginWithPassword}>
-          <h2>Secure Power BI Portal</h2>
+      <div className="login-wrapper">
+        <div className="login-card">
+          <h2 className="login-title">Secure Power BI Portal</h2>
+    
+          <form className="login-form" onSubmit={handleLoginWithPassword}>
+            <div className="input-group">
+              <label>Username</label>
+              <input
+                type="text"
+                name="username"
+                value={formData.username}
+                onChange={handleChange}
+                placeholder="Enter your username"
+                required
+              />
+            </div>
+    
+            <div className="input-group">
+              <label>Password</label>
+              <input
+                type="password"
+                name="password"
+                value={formData.password}
+                onChange={handleChange}
+                placeholder="Enter your password"
+                required
+              />
+            </div>
+    
+            {error && <p className="error-text">{error}</p>}
+    
+            <button type="submit" className="btn primary-btn">Login</button>
+    
+            <div className="divider">
+              <span>or</span>
+            </div>
+    
+            <button type="button" className="btn ms-btn" onClick={handleLoginWithMicrosoft}>
+             <img src="/ms-logo.png" alt="Microsoft" className="ms-icon" />
+               Sign in with Microsoft
+            </button>
 
-          <label>Username</label>
-          <input
-            type="text"
-            name="username"
-            value={formData.username}
-            onChange={handleChange}
-            autoComplete="username"
-            required
-          />
-
-          <label>Password</label>
-          <input
-            type="password"
-            name="password"
-            value={formData.password}
-            onChange={handleChange}
-            autoComplete="current-password"
-            required
-          />
-
-          {error && <p className="error-text">{error}</p>}
-
-          <button type="submit" className="primary-btn">
-            Login
-          </button>
-          <button
-            type="button"
-            className="primary-btn"
-            onClick={handleLoginWithMicrosoft}
-            style={{ marginTop: "1rem" }}
-          >
-            Sign in with Microsoft
-          </button>
-        </form>
+          </form>
+        </div>
       </div>
     );
+    
   }
 
   // ---------------------------------------------------------------------------
